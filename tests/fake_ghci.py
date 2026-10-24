@@ -18,5 +18,8 @@ with transcript.open('a', encoding='utf-8') as log:
             print('<interactive>:1:1: error: Not in scope: broken_code', flush=True)
         elif code == 'stall':
             time.sleep(30)
+        elif code == 'stall_after_output':
+            print('Waiting for prerequisite', flush=True)
+            time.sleep(30)
         elif code == 'explode':
             sys.exit(9)

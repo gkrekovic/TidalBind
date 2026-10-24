@@ -26,33 +26,39 @@ class GhciError(BridgeError):
     pass
 
 
-def boot_commands(text: str) -> list[str]:
-    """Read the line commands and explicit multiline blocks in BootTidal.hs."""
+def _boot_steps(text: str) -> list[tuple[int, str]]:
+    """Read boot commands with their original source line numbers."""
     try:
         # Drop comments lexically so multiline comments outside :{ :} do not
         # become incomplete GHCi commands. Quoted strings remain untouched.
         _, text, _ = _scan(text, "<boot>")
     except ScoreError as error:
         raise BridgeError(str(error)) from error
-    commands, current = [], None
-    for line in text.splitlines():
+    commands, current, block_line = [], None, 0
+    for line_number, line in enumerate(text.splitlines(), 1):
         stripped = line.strip()
         if stripped == ":{":
             if current is not None:
                 raise BridgeError("Nested :{ in boot file")
             current = []
+            block_line = line_number
         elif stripped == ":}":
             if current is None:
                 raise BridgeError("Unmatched :} in boot file")
-            commands.append(":{\n" + "\n".join(current) + "\n:}")
+            commands.append((block_line, ":{\n" + "\n".join(current) + "\n:}"))
             current = None
         elif current is not None:
             current.append(line)
         elif stripped and not stripped.startswith("--"):
-            commands.append(stripped)
+            commands.append((line_number, stripped))
     if current is not None:
         raise BridgeError("Unclosed :{ in boot file")
     return commands
+
+
+def boot_commands(text: str) -> list[str]:
+    """Read the line commands and explicit multiline blocks in BootTidal.hs."""
+    return [code for _, code in _boot_steps(text)]
 
 
 def _without_leading_comments(code: str) -> str:
@@ -90,7 +96,7 @@ class TidalBridge:
         commands = []
         if boot_file_path is not None:
             path = Path(boot_file_path).expanduser()
-            commands = boot_commands(path.read_text(encoding="utf-8-sig"))
+            commands = _boot_steps(path.read_text(encoding="utf-8-sig"))
         self.timeout, self.output = timeout, output or (lambda line: None)
         self._lock = RLock()
         self._lines: Queue[str | None] = Queue()
@@ -104,9 +110,9 @@ class TidalBridge:
         self.output_thread = Thread(target=self._read_output, daemon=True, name="tidalbind-ghci")
         self.output_thread.start()
         try:
-            self._exchange(':set prompt ""\n:set prompt-cont ""')
-            for command_text in commands:
-                self._exchange(command_text)
+            self._exchange(':set prompt ""\n:set prompt-cont ""', context="starting GHCi")
+            for line_number, command_text in commands:
+                self._exchange(command_text, context=f"loading boot file {path}, line {line_number}")
             self._booted = boot_file_path is not None
         except BaseException:
             self.stop()
@@ -124,26 +130,42 @@ class TidalBridge:
         finally:
             self._lines.put(None)
 
-    def _exchange(self, code: str) -> None:
+    def _exchange(self, code: str, *, context: str = "evaluating code") -> None:
         with self._lock:
             if self._closed or self.process.poll() is not None:
                 raise BridgeError("GHCi is not running")
             marker = "TIDALBIND_DONE_" + uuid4().hex
             try:
-                self.process.stdin.write(code + "\nputStrLn " + json.dumps(marker) + "\n")
+                # In +m mode a let/definition needs a blank line to finish.
+                # Without it, GHCi consumes the acknowledgement as more input
+                # for that definition and the caller waits until timeout.
+                self.process.stdin.write(code + "\n\nputStrLn " + json.dumps(marker) + "\n\n")
                 self.process.stdin.flush()
+            except KeyboardInterrupt:
+                self._abort()
+                raise
             except (OSError, ValueError) as error:
                 raise BridgeError(f"Cannot write to GHCi: {error}") from error
             deadline = time.monotonic() + self.timeout
-            errors = []
+            errors, recent = [], []
             while True:
                 try:
                     line = self._lines.get(timeout=max(0, deadline - time.monotonic()))
+                except KeyboardInterrupt:
+                    # An interrupted request has no trustworthy reply boundary.
+                    # Do not try another command (including hush) on this pipe.
+                    self._abort()
+                    raise
                 except Empty:
                     # There is no safe way to attribute subsequent output after
                     # a timed-out command. End this session rather than replay it.
                     self._abort()
-                    raise BridgeError(f"GHCi did not acknowledge a command within {self.timeout:g}s") from None
+                    excerpt = code if len(code) <= 500 else code[:500] + " …"
+                    details = "\nRecent GHCi output:\n" + "\n".join(recent) if recent else ""
+                    raise BridgeError(
+                        f"GHCi did not acknowledge a command within {self.timeout:g}s "
+                        f"while {context}.\nCommand:\n{excerpt}{details}"
+                    ) from None
                 if line is None:
                     raise BridgeError(f"GHCi exited unexpectedly (status {self.process.poll()})")
                 if marker in line:
@@ -155,6 +177,9 @@ class TidalBridge:
                     return
                 if _ERROR.search(line):
                     errors.append(line)
+                if line.strip():
+                    recent.append(line)
+                    recent = recent[-8:]
 
     def send_immediate(self, code: str) -> None:
         code = code.strip()
@@ -182,7 +207,21 @@ class TidalBridge:
     def _abort(self) -> None:
         self._closed = True
         if self.process.poll() is None:
-            self.process.terminate()
+            if os.name == "nt":
+                # ghcup/ghci shims can launch ghc.exe as a child. Terminating
+                # just the shim can leave that interpreter holding OSC ports
+                # and the inherited pipes after this session ends.
+                try:
+                    subprocess.run(
+                        ["taskkill", "/PID", str(self.process.pid), "/T", "/F"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        timeout=5, check=False,
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    pass  # Fall back to terminating the direct process below.
+            if self.process.poll() is None:
+                self.process.terminate()
             try:
                 self.process.wait(timeout=3)
             except subprocess.TimeoutExpired:

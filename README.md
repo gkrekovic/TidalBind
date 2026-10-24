@@ -92,6 +92,29 @@ supply the default boot path; otherwise it is `BootTidal.hs` in the working dire
 Use `--ghci /path/to/ghci` for a particular executable and `--timeout 60` for a
 slower boot. Run `tidalbind --help` for all options.
 
+If a startup error says **GHCi did not acknowledge a command**, read the expanded
+error for the boot filename, source line, command, and recent GHCi output. A timeout
+before `Ready` concerns starting GHCi or evaluating the boot file; it does not
+identify SuperCollider as the failing component. The bridge supplies the blank
+lines needed by GHCi's `:set +m` mode and aborts an interrupted request before
+reusing its pipe. On Windows, forced cleanup also targets this session's GHCi
+process tree, since a `ghci` launcher can have a separate interpreter child.
+
+If the blocked command is `startTidal`, check for an older Tidal interpreter still
+holding its control port. In a Windows Conda/CMD prompt, inspect the default port:
+
+```bat
+netstat -ano -p udp | findstr /C:":6010 "
+```
+
+The last column is the owning PID. Inspect it in Task Manager and close it only
+if it belongs to your previous TidalBind session. The port may differ if your boot
+file changes `cCtrlPort`. SuperDirt's audio/OSC server and Tidal's control listener
+are separate; restarting SuperCollider does not release a port owned by GHCi.
+If GHCi is still loading packages, `--timeout 60` allows more time, but increasing
+the timeout does not resolve a stalled boot command. Prefer interactive `quit`
+or a single Ctrl+C and allow shutdown to complete before restarting.
+
 **CC64 = 127 advances by one block**, matching the supplied TidalMIDI prototype.
 Releases do not advance. Each matching MIDI message is an event: repeated 127
 messages advance repeatedly; there is no implicit debounce or edge detection.
