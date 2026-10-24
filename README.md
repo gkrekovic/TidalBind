@@ -100,6 +100,12 @@ lines needed by GHCi's `:set +m` mode and aborts an interrupted request before
 reusing its pipe. On Windows, forced cleanup also targets this session's GHCi
 process tree, since a `ghci` launcher can have a separate interpreter child.
 
+If the output contains a broken `TIDALBIND_DONE_...` token interleaved with
+`Connected to SuperDirt`, update TidalBind. That identifies an acknowledgement bug
+in older versions: Tidal started, but its asynchronous log text split the printed
+token. Current versions use a flushed control byte recognized even mid-line, so
+concurrent logging cannot split the acknowledgement into unrecognizable pieces.
+
 If the blocked command is `startTidal`, check for an older Tidal interpreter still
 holding its control port. In a Windows Conda/CMD prompt, inspect the default port:
 
@@ -272,7 +278,7 @@ retriggering, a CC sweep, and hush with your actual boot file and audio system.
 - `cli.py`: MIDI port selection, terminal controls, logging, and JSONL replay.
 
 The bridge retains the prototype's `ghci -ignore-dot-ghci` process, combined-output
-reader thread, and explicit multiline boot handling. Unique acknowledgements
+reader thread, and explicit multiline boot handling. Control-byte acknowledgements
 replace boot sleeps; startup errors are surfaced, no demonstration kick is played,
 and shutdown waits for or terminates the process. Each session owns its process;
 there is no partially initialized singleton. Boot files should use ordinary GHCi
@@ -280,6 +286,8 @@ line commands and `:{` / `:}` for multiline definitions, as in the supplied scri
 GHCi failures leave the navigation pointer in place; fatal pipe failures/timeouts
 end the session. A successful acknowledgement establishes evaluation, not audible
 playback, and asynchronous Tidal diagnostics are forwarded to the terminal.
+The transport reserves ASCII ACK (byte `0x06`) in GHCi output for its serialized
+request/reply protocol; that byte is consumed by the reader and never displayed.
 
 Continuous control re-evaluates code, following the paper's implementation rather
 than using control buses. Expensive Haskell evaluations can delay queued MIDI

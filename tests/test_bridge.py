@@ -196,3 +196,46 @@ def test_windows_abort_targets_only_own_process_tree(monkeypatch, taskkill_avail
     process.wait.assert_called_once_with(timeout=3)
     assert process.terminate.called == (not taskkill_available)
     assert bridge._closed
+
+
+def test_interleaved_startup_output_does_not_corrupt_ack(fake, tmp_path):
+    command, _ = fake
+    boot = tmp_path / 'boot.hs'
+    boot.write_text('interleaved_startTidal\n')
+    output = []
+    with TidalBridge(boot, command=command, timeout=1, output=output.append) as bridge:
+        bridge.send_immediate('okay')
+    assert 'Connected to SuperDirt.' in ''.join(output)
+    assert '\x06' not in ''.join(output)
+
+
+def test_error_before_ack_without_newline_is_not_lost(fake):
+    command, _ = fake
+    output = []
+    with TidalBridge(command=command, output=output.append) as bridge:
+        with pytest.raises(GhciError, match='missingValue'):
+            bridge.send_immediate('broken_without_newline')
+        bridge.send_immediate('okay')
+    assert any('missingValue' in line for line in output)
+
+
+def test_real_ghci_ack_with_concurrent_character_output(tmp_path, real_ghci):
+    boot = tmp_path / 'boot.hs'
+    boot.write_text(r'''import Control.Concurrent (forkIO, threadDelay, killThread)
+import Data.IORef
+import System.IO (hSetBuffering, stdout, BufferMode(NoBuffering))
+hSetBuffering stdout NoBuffering
+counter <- newIORef (0 :: Int)
+let chatter = mapM_ (\c -> putChar c >> threadDelay 100) (concat (replicate 100 "Connected to SuperDirt.\n"))
+chatterThread <- forkIO chatter
+let hush = pure ()
+''')
+    output = []
+    with TidalBridge(boot, command=real_ghci, timeout=3, output=output.append) as bridge:
+        for _ in range(8):
+            bridge.send_immediate("modifyIORef' counter (+1)")
+        bridge.send_immediate('killThread chatterThread')
+        bridge.send_immediate('putStrLn ""')
+        bridge.send_block('readIORef counter >>= print')
+    assert output.count('8') == 1
+    assert '\x06' not in ''.join(output)

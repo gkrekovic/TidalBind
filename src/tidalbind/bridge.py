@@ -1,11 +1,10 @@
 """GHCi transport adapted from the supplied TidalMIDI.py prototype.
 
-A reader thread drains combined output. A unique printed fence acknowledges
-commands instead of timing boot steps with sleeps. No sound is started on boot.
+A reader thread drains combined output. A reserved control byte acknowledges
+commands without racing with concurrent Tidal log text. No sound starts on boot.
 """
 
 from pathlib import Path
-import json
 import os
 from queue import Empty, Queue
 import re
@@ -13,7 +12,6 @@ import subprocess
 from threading import RLock, Thread
 import time
 from typing import Callable, Sequence
-from uuid import uuid4
 
 from .score import ScoreError, _scan
 
@@ -85,6 +83,14 @@ _ERROR = re.compile(r"(?:\berror:|\*\*\* Exception|unknown command|Failed,|canno
                     r"Could not find module|not a valid command|syntax:|unrecognised (?:flag|command))",
                     re.IGNORECASE)
 
+# Only one request is in flight under _lock. An interrupted/timed-out request
+# terminates the process, so an old acknowledgement cannot satisfy a new one.
+# ASCII ACK is one byte: concurrent writers can split a text token but cannot
+# split this control signal. The output reader recognizes it even mid-line.
+_ACK = "\x06"
+_ACK_COMMAND = (r"TidalBindTransport.hPutChar TidalBindTransport.stdout '\ACK' >> "
+                r"TidalBindTransport.hFlush TidalBindTransport.stdout")
+
 
 class TidalBridge:
     def __init__(self, boot_file_path: str | Path | None = None, *,
@@ -110,7 +116,8 @@ class TidalBridge:
         self.output_thread = Thread(target=self._read_output, daemon=True, name="tidalbind-ghci")
         self.output_thread.start()
         try:
-            self._exchange(':set prompt ""\n:set prompt-cont ""', context="starting GHCi")
+            self._exchange(':set prompt ""\n:set prompt-cont ""\n'
+                           'import qualified System.IO as TidalBindTransport', context="starting GHCi")
             for line_number, command_text in commands:
                 self._exchange(command_text, context=f"loading boot file {path}, line {line_number}")
             self._booted = boot_file_path is not None
@@ -119,27 +126,39 @@ class TidalBridge:
             raise
 
     def _read_output(self) -> None:
+        pending: list[str] = []
+
+        def emit_line() -> None:
+            line = "".join(pending).rstrip("\r")
+            pending.clear()
+            self.output(line)
+            self._lines.put(line)
+
         try:
-            for line in self.process.stdout:
-                line = line.rstrip("\r\n")
-                # Forward asynchronous Tidal diagnostics even while the player
-                # is idle; protocol fences are consumed by _exchange only.
-                if not re.search(r"TIDALBIND_DONE_[0-9a-f]{32}", line):
-                    self.output(line)
-                self._lines.put(line)
+            for character in iter(lambda: self.process.stdout.read(1), ""):
+                if character == _ACK:
+                    if pending:
+                        # Preserve preceding diagnostics before enqueuing ACK.
+                        emit_line()
+                    self._lines.put(_ACK)
+                elif character == "\n":
+                    emit_line()
+                else:
+                    pending.append(character)
         finally:
+            if pending:
+                emit_line()
             self._lines.put(None)
 
     def _exchange(self, code: str, *, context: str = "evaluating code") -> None:
         with self._lock:
             if self._closed or self.process.poll() is not None:
                 raise BridgeError("GHCi is not running")
-            marker = "TIDALBIND_DONE_" + uuid4().hex
             try:
                 # In +m mode a let/definition needs a blank line to finish.
                 # Without it, GHCi consumes the acknowledgement as more input
                 # for that definition and the caller waits until timeout.
-                self.process.stdin.write(code + "\n\nputStrLn " + json.dumps(marker) + "\n\n")
+                self.process.stdin.write(code + "\n\n" + _ACK_COMMAND + "\n\n")
                 self.process.stdin.flush()
             except KeyboardInterrupt:
                 self._abort()
@@ -168,10 +187,7 @@ class TidalBridge:
                     ) from None
                 if line is None:
                     raise BridgeError(f"GHCi exited unexpectedly (status {self.process.poll()})")
-                if marker in line:
-                    prefix = line.split(marker, 1)[0]
-                    if prefix.strip():
-                        self.output(prefix)
+                if line == _ACK:
                     if errors:
                         raise GhciError("GHCi rejected code: " + "\n".join(errors))
                     return
