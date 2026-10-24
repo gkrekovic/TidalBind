@@ -29,6 +29,20 @@ Mido with python-rtmidi. On systems without a compatible wheel, building
 python-rtmidi also requires the platform's compiler and MIDI development libraries
 (e.g. `libasound2-dev` and `libjack-jackd2-dev` on Debian/Ubuntu).
 
+If startup reports `No module named 'mido'` (or `rtmidi`), the Python running
+TidalBind cannot find its MIDI dependencies. From the repository folder, run:
+
+```sh
+python -m pip install -e .
+python -c "import sys, mido, rtmidi; print(sys.executable)"
+python -m tidalbind --list-midi
+```
+
+Installing the project installs both `mido` and `python-rtmidi`. Use the same
+Python for installation and execution. If using an IDE, select the interpreter
+printed above; if using `.venv`, activate it before these commands. Installing
+with a separate `pip` command can target a different Python installation.
+
 For sound, independently install **GHC/GHCi, the TidalCycles Haskell package,
 SuperCollider, and SuperDirt**, following the
 [TidalCycles setup guide](https://tidalcycles.org/docs/getting-started/).

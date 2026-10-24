@@ -98,3 +98,42 @@ def test_unknown_midi_port_fails_before_ghci(monkeypatch, tmp_path, capsys):
     path.write_text('first')
     assert main([str(path), '--midi-port', 'missing']) == 1
     assert 'Available inputs' in capsys.readouterr().err
+
+
+def test_missing_mido_identifies_interpreter_and_install_command(monkeypatch, capsys):
+    monkeypatch.setitem(sys.modules, 'mido', None)
+    assert main(['--list-midi']) == 1
+    error = capsys.readouterr().err
+    assert "MIDI dependency 'mido'" in error
+    assert sys.executable in error
+    assert '-m pip install -e .' in error
+    assert 'same Python interpreter' in error
+
+
+def test_missing_rtmidi_identifies_distribution_name(monkeypatch, capsys):
+    from types import SimpleNamespace
+    import tidalbind.cli as cli
+
+    def unavailable():
+        raise ModuleNotFoundError("No module named 'rtmidi'", name='rtmidi')
+
+    monkeypatch.setattr(cli, '_mido', lambda: SimpleNamespace(get_input_names=unavailable))
+    assert main(['--list-midi']) == 1
+    error = capsys.readouterr().err
+    assert "MIDI dependency 'python-rtmidi'" in error
+    assert sys.executable in error
+    assert '-m pip install -e .' in error
+
+
+def test_unrelated_backend_import_error_is_not_misdiagnosed(monkeypatch, capsys):
+    from types import SimpleNamespace
+    import tidalbind.cli as cli
+
+    def unavailable():
+        raise ModuleNotFoundError("No module named 'another_module'", name='another_module')
+
+    monkeypatch.setattr(cli, '_mido', lambda: SimpleNamespace(get_input_names=unavailable))
+    assert main(['--list-midi']) == 1
+    error = capsys.readouterr().err
+    assert 'another_module' in error
+    assert 'MIDI dependency' not in error

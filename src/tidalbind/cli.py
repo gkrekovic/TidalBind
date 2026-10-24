@@ -6,6 +6,8 @@ import json
 import os
 from pathlib import Path
 from queue import Empty, Queue
+import shlex
+import subprocess
 import sys
 from threading import Thread
 from typing import TextIO
@@ -46,8 +48,24 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _missing_midi_dependency(package: str) -> RuntimeError:
+    args = [sys.executable, "-m", "pip", "install", "-e", "."]
+    install = subprocess.list2cmdline(args) if os.name == "nt" else shlex.join(args)
+    return RuntimeError(
+        f"MIDI dependency {package!r} is missing from this Python interpreter:\n  {sys.executable}\n"
+        f"From the TidalBind repository folder, run:\n  {install}\n"
+        "This installs both mido and python-rtmidi. Launch TidalBind with the same "
+        "Python interpreter; select it in your IDE or activate its virtual environment."
+    )
+
+
 def _mido():
-    import mido
+    try:
+        import mido
+    except ModuleNotFoundError as error:
+        if error.name != "mido":
+            raise
+        raise _missing_midi_dependency("mido") from error
     mido.set_backend("mido.backends.rtmidi")
     return mido
 
@@ -55,6 +73,10 @@ def _mido():
 def _ports(mido) -> list[str]:
     try:
         return mido.get_input_names()
+    except ModuleNotFoundError as error:
+        if error.name != "rtmidi":
+            raise
+        raise _missing_midi_dependency("python-rtmidi") from error
     except (OSError, RuntimeError) as error:
         raise RuntimeError(f"MIDI backend unavailable: {error}. "
                            "Connect a controller on a machine with MIDI support, "
