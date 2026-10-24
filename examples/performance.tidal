@@ -1,0 +1,19 @@
+-- Leading declaration-only blocks are armed on startup.
+{-! triggerNextBlock, sustain, =, 127 -}
+{-! hush, note48, >, 0 -}
+{-! resetCycles, note49, >, 0 -}
+
+-- Pedal advances here; MIDI note 36 can subsequently retrigger it.
+{-! triggerBlock, note36, >, 0 -}
+d1 $ sound "bd sd"
+   # lpf {-! map, cc74, 0, 127, 100, 9000 -}
+
+-- Both note and velocity update before a single evaluation of this block.
+d2 $ note "{-! map, noteOn -}" # s "superpiano"
+   # gain {-! map, velocity, 0, 127, 0, 1 -}
+
+-- This replaces the previous triggerBlock/note36 binding.
+{-! triggerBlock, note36, >, 0 -}
+d1 $ sound "bd*4"
+
+hush

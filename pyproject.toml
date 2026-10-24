@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tidalbind"
+version = "0.1.0"
+description = "Score-embedded MIDI control for TidalCycles"
+requires-python = ">=3.10"
+dependencies = ["mido>=1.3,<2", "python-rtmidi>=1.5,<2"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "setuptools>=68"]
+
+[project.scripts]
+tidalbind = "tidalbind.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

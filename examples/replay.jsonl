@@ -1,0 +1,17 @@
+{"type":"control_change","control":74,"value":64}
+{"type":"control_change","control":64,"value":127}
+{"type":"control_change","control":64,"value":0}
+{"type":"note_on","note":36,"velocity":100}
+{"type":"control_change","control":74,"value":127}
+{"type":"note_on","note":60,"velocity":96}
+{"type":"control_change","control":64,"value":127}
+{"type":"note_on","note":67,"velocity":127}
+{"type":"note_off","note":67,"velocity":64}
+{"type":"control_change","control":64,"value":0}
+{"type":"control_change","control":64,"value":127}
+{"type":"note_on","note":36,"velocity":110}
+{"type":"note_on","note":48,"velocity":127}
+{"type":"note_on","note":49,"velocity":127}
+{"type":"control_change","control":64,"value":0}
+{"type":"control_change","control":64,"value":127}
+{"type":"control_change","control":64,"value":127}

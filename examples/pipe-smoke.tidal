@@ -1,0 +1,4 @@
+-- A transport check for plain GHCi; it does not require Tidal or SuperDirt.
+putStrLn "TidalBind pipe ready"
+
+print (2 + 2)
